@@ -1,6 +1,40 @@
 import { loadStdlib } from '@reach-sh/stdlib'
 import * as backend from './build/index.main.mjs'
+import { scenarios } from './scenarios.mjs'
 const reach = loadStdlib({ REACH_NO_WARN: 'Y' })
+
+// Scenario mode ---------------------------------------
+// Set BJ_SCENARIO=<name> (or pass the name as the first argument) to replay a
+// scripted game: a fixed deck order and fixed player/dealer decisions.
+// Without it, the game is fully random, exactly as before.
+const requested = process.env.BJ_SCENARIO || process.argv[2]
+if (requested && !Object.prototype.hasOwnProperty.call(scenarios, requested)) {
+	console.log(
+		`[!] Unknown scenario "${requested}". Available: ${Object.keys(
+			scenarios
+		).join(', ')}`
+	)
+	process.exit(1)
+}
+const scenario = requested ? scenarios[requested] : null
+const scriptedRolls = scenario ? [...scenario.rolls] : null
+const record = { outcomes: {}, reclaims: {}, surrenders: {}, bank: null }
+
+/**
+ * Picks a whole number from 0 to n - 1.
+ * Random normally, but read from the scenario's script in scenario mode.
+ * @param {Number} n The number of possible results
+ * @returns A whole number from 0 to n - 1
+ */
+const roll = (n) => {
+	if (!scriptedRolls) return Math.floor(Math.random() * n)
+	if (!scriptedRolls.length)
+		throw new Error(`Scenario "${requested}" ran out of scripted rolls`)
+	const r = scriptedRolls.shift()
+	if (!(Number.isInteger(r) && r >= 0 && r < n))
+		throw new Error(`Scripted roll ${r} is not valid for a choice of ${n}`)
+	return r
+}
 
 /**
  * Converts a Byte input to String, stripping it of any null character
@@ -186,7 +220,30 @@ const shuffleDeck = (hearts, diamonds, spades, clovers) => {
 	return newDeck
 }
 
-const shuffledDeck = shuffleDeck(hearts, diamonds, spades, clovers)
+/**
+ * Builds a deck in an exact order from short card codes, e.g. ['8h', '10d', 'As'].
+ * Suits: h = hearts, d = diamonds, s = spades, c = clovers.
+ * @param {Array[String]} codes The cards in the order they will be dealt
+ * @returns An array of cards, in the same shape shuffleDeck returns
+ */
+const buildDeck = (codes) => {
+	const suits = { h: 'hearts', d: 'diamonds', s: 'spades', c: 'clovers' }
+	const faces = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K']
+	const seen = new Set()
+	return codes.map((code) => {
+		const face = code.slice(0, -1)
+		const suit = suits[code.slice(-1)]
+		if (!faces.includes(face) || !suit)
+			throw new Error(`Invalid card code "${code}"`)
+		if (seen.has(code)) throw new Error(`Card "${code}" appears twice`)
+		seen.add(code)
+		return [face, suit]
+	})
+}
+
+const shuffledDeck = scenario
+	? buildDeck(scenario.deck)
+	: shuffleDeck(hearts, diamonds, spades, clovers)
 
 /**
  * Formats BigNumber microalgos to Algos in String
@@ -367,7 +424,9 @@ const play = async (player, who) => {
 				`[-] ${who}'s second hand was dealt:`,
 				player.cards_[player.cards_.length - 1]
 			)
-		} catch (error) {}
+		} catch (error) {
+			console.log({ error })
+		}
 	}
 	const dealerFirstCard = dealer.cards[0][0]
 	const tenCardsNA = {
@@ -379,7 +438,7 @@ const play = async (player, who) => {
 	}
 	if (cardValue(player.cards) != 21) {
 		if (dealerFirstCard in tenCardsNA) {
-			const move = Math.floor(Math.random() * 3)
+			const move = roll(3)
 			if (move == 0 && !playerSurrendered) {
 				try {
 					const totalBet = fmt(await player.ctc.apis.Player.buyInsurance(true))
@@ -399,13 +458,13 @@ const play = async (player, who) => {
 			let hasDecided = false
 			let value = cardValue(player.cards)
 			while (value < 21) {
-				const choice = choices[Math.floor(Math.random() * choices.length)]
+				const choice = choices[roll(choices.length)]
 				if (
 					cardValue(player.cards) == 9 ||
 					cardValue(player.cards) == 10 ||
 					(cardValue(player.cards) == 11 && hasDecided == false)
 				) {
-					const doubleDown = Math.floor(Math.random() * 2)
+					const doubleDown = roll(2)
 					if (doubleDown) {
 						try {
 							const totalBet = fmt(
@@ -467,12 +526,24 @@ const play = async (player, who) => {
 		}
 	} else {
 		console.log(`[+] ${who} was dealt a natural`)
+		// A split hand that reaches 21 on its first extra card must still be submitted,
+		// otherwise the contract has no hand on record for it
+		try {
+			await player.ctc.apis.Player.submitHand(
+				true,
+				cardValue(player.cards),
+				player.cards.length
+			)
+			console.log(`[-] ${who} has submitted his hand`)
+		} catch (error) {
+			console.log({ error })
+		}
 		console.log('')
 	}
 	if (player.cards_.length) {
 		if (cardValue(player.cards_) != 21) {
 			if (dealerFirstCard in tenCardsNA) {
-				const move = Math.floor(Math.random() * 3)
+				const move = roll(3)
 				if (move == 0) {
 					try {
 						const totalBet = fmt(
@@ -494,13 +565,13 @@ const play = async (player, who) => {
 				let hasDecided = false
 				let value = cardValue(player.cards_)
 				while (value < 21) {
-					const choice = choices[Math.floor(Math.random() * choices.length)]
+					const choice = choices[roll(choices.length)]
 					if (
 						cardValue(player.cards_) == 9 ||
 						cardValue(player.cards_) == 10 ||
 						(cardValue(player.cards_) == 11 && hasDecided == false)
 					) {
-						const doubleDown = Math.floor(Math.random() * 2)
+						const doubleDown = roll(2)
 						if (doubleDown) {
 							try {
 								const totalBet = fmt(
@@ -559,6 +630,16 @@ const play = async (player, who) => {
 			}
 		} else {
 			console.log(`[+] ${who} was dealt a natural on his second hand`)
+			try {
+				await player.ctc.apis.Player.submitHand(
+					false,
+					cardValue(player.cards_),
+					player.cards_.length
+				)
+				console.log(`[-] ${who} has submitted his second hand`)
+			} catch (error) {
+				console.log({ error })
+			}
 			console.log('')
 		}
 	}
@@ -608,7 +689,7 @@ const playDealer = async (dealer, onSurrender = false) => {
 		let value = cardValue(dealer.cards)
 		let keepPlaying = true
 		while (keepPlaying && value < 21) {
-			const choice = Math.floor(Math.random() * 2)
+			const choice = roll(2)
 			if (choice) {
 				dealCard(dealer.cards, 1)
 				console.log(`[+] Dealer called for a hit`)
@@ -681,6 +762,7 @@ const getOutcome = async (player, who, isFirstHand = true) => {
 			console.log({ error })
 		}
 	}
+	if (outcome.length) record.outcomes[`${who}${isFirstHand ? '' : '/2'}`] = outcome[0]
 	return outcome
 }
 
@@ -692,6 +774,8 @@ const getOutcome = async (player, who, isFirstHand = true) => {
 const dealCard = (cards = [], amount = 1) => {
 	let i = 0
 	for (i; i < amount; i++) {
+		if (!shuffledDeck.length)
+			throw new Error('The deck ran out of cards')
 		cards.push(shuffledDeck.shift())
 	}
 }
@@ -789,6 +873,7 @@ const simulatePlay = async (playerCount = 4) => {
 					)
 				)
 
+				record.surrenders[`Player_${i + 1}`] = outcome
 				if (outcome == 'End') {
 					console.log(
 						`[-] Player_${
@@ -829,6 +914,7 @@ const simulatePlay = async (playerCount = 4) => {
 						player.cards_.length
 					)
 				)
+				record.surrenders[`Player_${i + 1}/2`] = outcome
 				if (outcome == 'End') {
 					console.log(
 						`[-] Player_${
@@ -918,6 +1004,7 @@ const simulatePlay = async (playerCount = 4) => {
 				reach.standardUnit
 			)
 			const totalBet = fmt(await player.ctc.apis.Player.reclaim(true))
+			record.reclaims[`Player_${i + 1}`] = Number(totalBet)
 			console.log(
 				`[+] Player_${i + 1} reclaimed: ${totalBet} ${reach.standardUnit}`
 			)
@@ -929,6 +1016,7 @@ const simulatePlay = async (playerCount = 4) => {
 			console.log('')
 			if (player.cards_.length) {
 				const totalBet = fmt(await player.ctc.apis.Player.reclaim(false))
+				record.reclaims[`Player_${i + 1}/2`] = Number(totalBet)
 				console.log(
 					`[+] Player_${i + 1} reclaimed for his second hand: ${totalBet} ${
 						reach.standardUnit
@@ -944,6 +1032,39 @@ const simulatePlay = async (playerCount = 4) => {
 				console.log('')
 			}
 		}
+	}
+}
+/**
+ * Compares what happened in a scenario run with what the scenario expects,
+ * and fails the run (exit code 1) if anything differs
+ */
+const verifyScenario = () => {
+	const problems = []
+	const expected = scenario.expect
+	const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+	if (!same(record.outcomes, expected.outcomes || {}))
+		problems.push(
+			`outcomes: expected ${JSON.stringify(expected.outcomes || {})}, got ${JSON.stringify(record.outcomes)}`
+		)
+	if (!same(record.surrenders, expected.surrenders || {}))
+		problems.push(
+			`surrenders: expected ${JSON.stringify(expected.surrenders || {})}, got ${JSON.stringify(record.surrenders)}`
+		)
+	if (!same(record.reclaims, expected.reclaims || {}))
+		problems.push(
+			`reclaims: expected ${JSON.stringify(expected.reclaims || {})}, got ${JSON.stringify(record.reclaims)}`
+		)
+	if (record.bank !== expected.bank)
+		problems.push(`bank: expected ${expected.bank}, got ${record.bank}`)
+	if (scriptedRolls.length)
+		problems.push(`${scriptedRolls.length} scripted roll(s) were never used`)
+	console.log('')
+	if (problems.length) {
+		console.log(`[x] SCENARIO FAILED: ${requested}`)
+		problems.forEach((p) => console.log(`    - ${p}`))
+		process.exitCode = 1
+	} else {
+		console.log(`[✓] SCENARIO PASSED: ${requested}`)
 	}
 }
 console.log('[+] Starting the Game...')
@@ -969,7 +1090,9 @@ reach.withDisconnect(async () =>
 			)
 			console.log('')
 			await simulatePlay(
-				maxPlayers(bankAmount(Number(initialBankView)), Number(fmt(betAmount)))
+				scenario
+					? scenario.players
+					: maxPlayers(bankAmount(Number(initialBankView)), Number(fmt(betAmount)))
 			)
 			console.log(`[+] The Round has ended`)
 			console.log(
@@ -977,6 +1100,10 @@ reach.withDisconnect(async () =>
 				fmt((await dealer.ctc.v.bank())[1]),
 				reach.standardUnit
 			)
+			if (scenario) {
+				record.bank = Number(fmt((await dealer.ctc.v.bank())[1]))
+				verifyScenario()
+			}
 			console.log('')
 			try {
 				const bankBal = fmt(await dealer.ctc.apis.Dealer.endGame())
