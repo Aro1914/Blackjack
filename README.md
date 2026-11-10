@@ -8,7 +8,7 @@ The repository holds three iterations of the contract. Each lives in its own fol
 | --- | --- | --- |
 | v1 | `v1/` | Stateless prototype. One `getOutcome` call carries the player's whole hand and bet choices and settles immediately. |
 | v2 | `v2/` | Stateful redesign. The contract tracks every player's bets and hands, and adds splitting, a dealer round cycle, and a solvency check. |
-| **v2.1** | `v2.1/` | Current version. Same game as v2 with a cleaner close-out (no workaround step) and a clean compile. |
+| **v2.1** | `v2.1/` | Current version. Same game as v2 with the close-out workaround removed; compiler verification passes, but close-out and bytecode-size warnings remain. <!-- coderabbit-ai-generated:v1 --> <!-- coderabbit-ai-generated-section:v1:1cb4fd636f55a577add7450d973c0addbbdc6b816bb23eb5b06d41354b9dbd2f --> <!-- /coderabbit-ai-generated:v1 --> |
 
 ---
 
@@ -36,7 +36,7 @@ The repository holds three iterations of the contract. Each lives in its own fol
 | Retrieve | Player bought insurance and the dealer has a natural | Full stake (bet plus insurance) returned |
 | End | Player surrendered and the dealer turns out to have a natural | Round is voided, see below |
 
-When a player wins or pushes with insurance bought, the insurance stake is forfeited and not returned.
+For **Player Wins** and **Push**, the insurance stake is forfeited and not returned. For **Blackjack**, the payout is 2.5× the full recorded stake, including insurance: a 100 ALGO base bet with 100 ALGO insurance pays 500 ALGO. <!-- coderabbit-ai-generated:v1 --> <!-- coderabbit-ai-generated-section:v1:228be372e6d98f4aeacd176e054d8535b75980362b10d6e857ff3a4cf59a8165 --> <!-- /coderabbit-ai-generated:v1 -->
 
 ---
 
@@ -61,9 +61,9 @@ Per-player data is stored in Reach `Map`s: `players1stBet`, `players2ndBet`, `pl
 
 1. **Deploy** – Dealer publishes the bank and base bet and pays the bank into the contract.
 2. **Bets** – each player calls `placeBet` (`pendingPayouts` goes up by one).
-3. **Play** – players act, optionally calling `doubleDown`, `buyInsurance` or `surrender`, then `submitHand` with their final value and card count.
-4. **Dealer** – the Dealer calls `submitHand`, which sets `hasDealt`.
-5. **Settle** – each player calls `getOutcome`; the contract computes the result with the pure `getOutcome` function, transfers any winnings, removes the player's entries and decrements `pendingPayouts`.
+3. **Play** – players act, optionally calling `doubleDown` or `buyInsurance`, then `Player.submitHand` with their final value and card count. Surrender is a separate path: first call `Dealer.submitHand` so surrender can account for a dealer natural, then call `Player.surrender` for the player’s hand. Surrender settles and removes that hand immediately; do not subsequently pass it to `Player.submitHand` or settle it again with `getOutcome`. <!-- coderabbit-ai-generated:v1 --> <!-- coderabbit-ai-generated-section:v1:21e5e5a4c4452d4fc0b690f5ce1b11d5086194a82e447d39c74937acf4797dba --> <!-- /coderabbit-ai-generated:v1 -->
+4. **Dealer** – if not already submitted for surrender, the Dealer calls `submitHand`, which sets `hasDealt`. <!-- coderabbit-ai-generated:v1 --> <!-- coderabbit-ai-generated-section:v1:1420719a3a0d38d3313760d99e64b8ef691d7b27ef40942670037e6deab219b4 --> <!-- /coderabbit-ai-generated:v1 -->
+5. **Settle** – each player calls `getOutcome` for each remaining, unsurrendered hand; the contract computes the result with the pure `getOutcome` function, transfers any winnings, removes the player's entries and decrements `pendingPayouts`. <!-- coderabbit-ai-generated:v1 --> <!-- coderabbit-ai-generated-section:v1:6cfb28f1b8ad7a80e8ccd94e6b60ce7cc95ef64eb9fd66fad625879b9c0d534b --> <!-- /coderabbit-ai-generated:v1 -->
 6. **Next** – when `pendingPayouts == 0` the Dealer can call `newRound` (resets the dealer hand) or `endGame` (withdraws the remaining bank and exits).
 
 ### Safeguards
@@ -72,7 +72,7 @@ Per-player data is stored in Reach `Map`s: `players1stBet`, `players2ndBet`, `pl
 - **Access control:** player APIs reject the dealer address, and dealer APIs reject everyone else.
 - **State checks:** you cannot double down or buy insurance twice, settle before the dealer has submitted, or surrender after raising your bet.
 - **Voided rounds (`reclaim`):** if a player surrendered and the dealer actually has a natural, the round ends as `END`, `playerSurrendered` is set, and every other seated player can call `reclaim` to take their full stake back.
-- **Round integrity:** `newRound` and `endGame` both require `pendingPayouts == 0`, so the dealer cannot walk away while players are still owed a result.
+- **Round integrity:** `newRound` and `endGame` both require `pendingPayouts == 0`. However, the solvency threshold above only governs continuation: settlement can reduce the bank below that threshold and trigger automatic exit, transferring the remaining bank to the dealer even while a hand remains pending. The pending-payout check in `endGame` does not protect against this automatic exit. <!-- coderabbit-ai-generated:v1 --> <!-- coderabbit-ai-generated-section:v1:ec599a094a739e308b87e73caf90dd10e6f334dc72c88b74734fd2e1aa41ed4e --> <!-- /coderabbit-ai-generated:v1 -->
 
 ### Verification
 
@@ -100,7 +100,7 @@ Per-player data is stored in Reach `Map`s: `players1stBet`, `players2ndBet`, `pl
 
 - Removed the `touch` API and the trailing empty `parallelReduce` that v2 used as a fix for failing close-outs caused by Map usage.
 - In `placeBet`, hand initialisation now happens inside the branch for the hand being placed, instead of resetting both hands on every call.
-- The compile log is clean: v2's Algorand close-out and Solidity bytecode-size warnings no longer appear.
+- Compiler verification passes (1858 theorems, no failures), but `v2.1/compile_v2.1.txt` still records an Algorand close-out warning about Map entries and Solidity bytecode-size warnings (63,070 and 31,084 bytes versus the 24,576-byte limit). <!-- coderabbit-ai-generated:v1 --> <!-- coderabbit-ai-generated-section:v1:056a871062154d1df44518bbba01ea77265cd12ebec66e5a48d516bd29b482c1 --> <!-- /coderabbit-ai-generated:v1 -->
 
 ---
 
