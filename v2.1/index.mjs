@@ -8,15 +8,15 @@ const reach = loadStdlib({ REACH_NO_WARN: 'Y' })
 // scripted game: a fixed deck order and fixed player/dealer decisions.
 // Without it, the game is fully random, exactly as before.
 const requested = process.env.BJ_SCENARIO || process.argv[2]
-const scenario = requested && scenarios[requested] ? scenarios[requested] : null
-if (process.env.BJ_SCENARIO && !scenario) {
+if (requested && !Object.prototype.hasOwnProperty.call(scenarios, requested)) {
 	console.log(
-		`[!] Unknown scenario "${process.env.BJ_SCENARIO}". Available: ${Object.keys(
+		`[!] Unknown scenario "${requested}". Available: ${Object.keys(
 			scenarios
 		).join(', ')}`
 	)
 	process.exit(1)
 }
+const scenario = requested ? scenarios[requested] : null
 const scriptedRolls = scenario ? [...scenario.rolls] : null
 const record = { outcomes: {}, reclaims: {}, surrenders: {}, bank: null }
 
