@@ -142,6 +142,43 @@ Across all 32 v2.1 logs, none shows an error. The `reclaim` path (surrender agai
 
 ---
 
+## Scripted scenarios (v2.1)
+
+A normal run is random, so rare paths can go unexercised: none of the 32 saved v2.1 runs contains a split or a Retrieve. Scenario mode removes the luck. It replaces the shuffle with a fixed deck order and replaces every random decision (hit or stand, double down, insurance, surrender, the dealer's moves) with a script. After the round, the simulation compares the results with what the scenario expects and exits with code 1 on any difference.
+
+| Scenario | What it exercises | Expected |
+| --- | --- | --- |
+| `split-eights-double` | Split a pair of 8s, double down on one split hand, a second player pushes | Player_1: Player Wins and Dealer Wins; Player_2: Push; bank 8,900 |
+| `insured-dealer-natural` | Dealer Ace up with a natural, one insured player and one not | Player_1: Retrieve; Player_2: Dealer Wins; bank 9,100 |
+| `split-insured-dealer-natural` | Split 8s with insurance bought on both hands against a dealer natural | Both hands Retrieve; bank 9,000 |
+| `split-aces-twentyone` | Split Aces where the first hand is dealt a King for 21 | Blackjack and Player Wins; bank 8,750 |
+| `surrender-voids-round` | Surrender against a dealer natural voids the round, so the other players `reclaim` | Surrender result End; reclaims of 200 and 100; bank 9,050 |
+
+Scenarios live in `scenarios.mjs`, which documents the deck order and the meaning of each scripted decision. To add one, give it a deck, a list of rolls and an `expect` block.
+
+**Running one on a devnet:**
+
+```bash
+BJ_SCENARIO=split-eights-double ../reach run
+```
+
+The name can also be passed as the first argument. I haven't confirmed that `reach run` forwards either one to the script. If neither arrives, set `requested` near the top of `index.mjs` to the scenario name.
+
+**Checking scenarios without Reach:**
+
+```bash
+node dry-run.mjs                      # every scenario
+node dry-run.mjs split-aces-twentyone # one scenario
+```
+
+The dry run replaces the Reach library and compiled backend with a small JavaScript model of `index.rsh`. It confirms that each script drives the simulation into the intended situation and that the expected results follow the rules as written in the contract. It does not test the compiled contract, which only a `reach run` can do.
+
+### What building the suite found
+
+When a split hand is dealt 21 on its first extra card, which can only happen after splitting Aces, the simulation logged "dealt a natural" but never submitted the hand. In `index.rsh` an unsubmitted hand is stored as value 0, so in the dry-run model the winning 21 settles as Dealer Wins. `split-aces-twentyone` shows this: without the fix it ends with bank 9,000 instead of 8,750. `index.mjs` now submits that hand. This comes from reading the code and the model, and hasn't been confirmed on a devnet.
+
+Other changes to `index.mjs` are listed in `index.mjs.patch`: the scenario hooks, and the split step's empty `catch` block now logs its error instead of hiding it.
+
 ## Running it
 
 You need Docker and the Reach CLI. The repo includes the `reach` launcher script.
@@ -176,6 +213,10 @@ Blackjack/
 │   └── output_files/  # sample run logs
 ├── v2/                # stateful contract with split + dealer round cycle
 └── v2.1/              # current version
+    ├── index.rsh      # contract
+    ├── index.mjs      # simulation, with scenario mode
+    ├── scenarios.mjs  # scripted scenarios and expected results
+    └── dry-run.mjs    # runs the scenarios against a JavaScript model, no Reach needed
 ```
 
 ---
@@ -186,6 +227,7 @@ These are worth knowing before treating this as more than a demo.
 
 - **Cards are not dealt on-chain.** The deck and shuffle live in the off-chain script. Players and the dealer submit their own `cardValue` and `cardCount`, and the contract trusts them. A player could report a better hand than they hold. A production version would need a commit-reveal scheme or another verifiable randomness approach.
 - **Simplified rules.** The dealer's hit or stand is chosen at random (run 28 has the dealer hitting on 18), where standard rules fix it by total. A single 52-card deck is used per run. In the simulation only pairs of 8s or Aces are split (run 31 has a player standing on 7-7).
-- **Loose action timing.** The contract doesn't limit double down to the opening two cards (run 28 doubles after a hit), and insurance can be bought whatever the dealer's visible card is (run 28 buys it against a jack). It only pays out when the dealer's 21 is a two-card natural.
+- **Loose action timing.** The contract doesn't limit double down to the opening two cards (run 28 doubles after a hit) and doesn't check the dealer's visible card before accepting insurance. The simulation offers insurance only against a ten-value card or an Ace, where standard rules allow it against an Ace only. Insurance pays out only when the dealer's 21 is a two-card natural.
+- **Split 21 pays as Blackjack.** The contract treats any two-card 21 as Blackjack (2.5×), including one made on a split hand (an Ace and a ten-value card after splitting Aces). Many casinos pay such a hand at 1:1.
 - **Devnet only.** The simulation relies on faucet funding.
 - **Fixed bet size.** Every bet equals the base bet chosen by the dealer at deployment.
